@@ -172,34 +172,58 @@ export class DungeonScene extends Phaser.Scene {
         if (direction.length() > 0) {
             direction.normalize();
 
-            // คำนวณตำแหน่งใหม่ที่ตัวละครต้องการเดินไป
-            const nextX =
-                this.player.x + direction.x * speed * (delta / 1000);
+                
+            // คำนวณระยะทางที่ต้องการเดินในเฟรมนี้
+            const moveAmountX =
+                direction.x * speed * (delta / 1000);
 
-            const nextY =
-                this.player.y + direction.y * speed * (delta / 1000);
+            const moveAmountY =
+                direction.y * speed * (delta / 1000);
 
-            // ใช้กรอบตัวละครประมาณ 16 x 24 พิกเซล
-            const playerBounds = new Phaser.Geom.Rectangle(
+            // ทดลองขยับเฉพาะแกน X ก่อน
+            const nextX = this.player.x + moveAmountX;
+
+            const playerBoundsX = new Phaser.Geom.Rectangle(
                 nextX - 8,
+                this.player.y - 12,
+                16,
+                24
+            );
+
+            const hitsWallX = this.walls.some((wall) =>
+                Phaser.Geom.Intersects.RectangleToRectangle(
+                    playerBoundsX,
+                    wall
+                )
+            );
+
+            // ถ้าแกน X ไม่ชนกำแพง ให้ขยับในแนวนอน
+            if (!hitsWallX) {
+                this.player.x = nextX;
+            }
+
+            // ทดลองขยับเฉพาะแกน Y โดยใช้ตำแหน่ง X ล่าสุด
+            const nextY = this.player.y + moveAmountY;
+
+            const playerBoundsY = new Phaser.Geom.Rectangle(
+                this.player.x - 8,
                 nextY - 12,
                 16,
                 24
             );
 
-            // ตรวจว่าตำแหน่งใหม่ชนกำแพงหรือไม่
-            const hitsWall = this.walls.some((wall) =>
+            const hitsWallY = this.walls.some((wall) =>
                 Phaser.Geom.Intersects.RectangleToRectangle(
-                    playerBounds,
+                    playerBoundsY,
                     wall
                 )
             );
 
-            // ขยับตัวละครเฉพาะเมื่อไม่ชนกำแพง
-            if (!hitsWall) {
-                this.player.x = nextX;
+            // ถ้าแกน Y ไม่ชนกำแพง ให้ขยับในแนวตั้ง
+            if (!hitsWallY) {
                 this.player.y = nextY;
             }
+
         }
 
         // จำกัดไม่ให้ตัวละครเดินออกนอกหน้าจอ
