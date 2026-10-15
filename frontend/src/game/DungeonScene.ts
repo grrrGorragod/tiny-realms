@@ -11,6 +11,7 @@ export class DungeonScene extends Phaser.Scene {
         left: Phaser.Input.Keyboard.Key;
         right: Phaser.Input.Keyboard.Key;
     };
+    private walls: Phaser.Geom.Rectangle[] = [];
 
     constructor() {
         super({ key: "DungeonScene" });
@@ -67,6 +68,47 @@ export class DungeonScene extends Phaser.Scene {
 
         // ทำให้ตัวละครอยู่เหนือพื้นหิน
         this.player.setDepth(1);
+
+        // สร้างเครื่องมือวาดกำแพง
+        const wallGraphics = this.add.graphics();
+
+        // กำหนดตำแหน่งกำแพง: x, y, ความกว้าง, ความสูง
+        const wallPositions = [
+            { x: 160, y: 120, width: 200, height: 30 },
+            { x: 440, y: 160, width: 30, height: 160 },
+            { x: 200, y: 340, width: 180, height: 30 },
+        ];
+
+        // วาดกำแพงแต่ละชิ้นและบันทึกพื้นที่สำหรับตรวจการชน
+        for (const wall of wallPositions) {
+            wallGraphics.fillStyle(0x55515b, 1);
+            wallGraphics.fillRect(
+                wall.x,
+                wall.y,
+                wall.width,
+                wall.height
+            );
+
+            wallGraphics.lineStyle(2, 0x82798a, 1);
+            wallGraphics.strokeRect(
+                wall.x,
+                wall.y,
+                wall.width,
+                wall.height
+            );
+
+            this.walls.push(
+                new Phaser.Geom.Rectangle(
+                    wall.x,
+                    wall.y,
+                    wall.width,
+                    wall.height
+                )
+            );
+        }
+
+        // ให้กำแพงอยู่เหนือพื้น แต่ยังแสดงตัวละครได้
+        wallGraphics.setDepth(2);
 
         // 5. เตรียมปุ่มลูกศร
         if (!this.input.keyboard) {
@@ -130,9 +172,34 @@ export class DungeonScene extends Phaser.Scene {
         if (direction.length() > 0) {
             direction.normalize();
 
-            // คูณ delta เพื่อให้ความเร็วสม่ำเสมอในแต่ละเฟรม
-            this.player.x += direction.x * speed * (delta / 1000);
-            this.player.y += direction.y * speed * (delta / 1000);
+            // คำนวณตำแหน่งใหม่ที่ตัวละครต้องการเดินไป
+            const nextX =
+                this.player.x + direction.x * speed * (delta / 1000);
+
+            const nextY =
+                this.player.y + direction.y * speed * (delta / 1000);
+
+            // ใช้กรอบตัวละครประมาณ 16 x 24 พิกเซล
+            const playerBounds = new Phaser.Geom.Rectangle(
+                nextX - 8,
+                nextY - 12,
+                16,
+                24
+            );
+
+            // ตรวจว่าตำแหน่งใหม่ชนกำแพงหรือไม่
+            const hitsWall = this.walls.some((wall) =>
+                Phaser.Geom.Intersects.RectangleToRectangle(
+                    playerBounds,
+                    wall
+                )
+            );
+
+            // ขยับตัวละครเฉพาะเมื่อไม่ชนกำแพง
+            if (!hitsWall) {
+                this.player.x = nextX;
+                this.player.y = nextY;
+            }
         }
 
         // จำกัดไม่ให้ตัวละครเดินออกนอกหน้าจอ
