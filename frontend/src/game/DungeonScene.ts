@@ -19,6 +19,10 @@ type EnemyState = {
     damage: number;
     attackCooldown: number;
     alive: boolean;
+
+    //BURN
+    burnTimer: number;
+    burnTickTimer: number;
 };
 
 type EnemyEntity = {
@@ -33,10 +37,14 @@ type DungeonRoom = {
     doors: Map<Side, Door>;
     cleared: boolean;
     enemies: EnemyState[];
+
+    chestSpawned: boolean;
+    chestOpened: boolean;
 };
 
 
 type PlayerClass = "warrior" | "mage";
+type SwordElement = "normal" | "fire" | "lightning" | "healing" | "warp";
 
 type ProjectileEntity = {
     sprite: Phaser.GameObjects.Arc;
@@ -51,6 +59,20 @@ type ProjectileEntity = {
 };
 
 
+type FireWaveEntity = {
+    sprite: Phaser.GameObjects.Arc;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    traveled: number;
+    maxDistance: number;
+    damage: number;
+    hitEnemyIds: Set<number>;
+};
+
+
+
 export class DungeonScene extends Phaser.Scene {
     private player!: Phaser.GameObjects.Container;
     private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
@@ -63,6 +85,7 @@ export class DungeonScene extends Phaser.Scene {
     };
 
     private dodgeKey!: Phaser.Input.Keyboard.Key;
+    private fireSwordKey!: Phaser.Input.Keyboard.Key;
 
     private walls: Phaser.Geom.Rectangle[] = [];
     private rooms = new Map<number, DungeonRoom>();
@@ -73,7 +96,10 @@ export class DungeonScene extends Phaser.Scene {
 
 
     private playerClass: PlayerClass = "warrior";
+    private swordElement: SwordElement = "normal";
     private projectiles: ProjectileEntity[] = [];
+
+    private fireWaves: FireWaveEntity[] = [];
 
     private warriorDamage = 25;
     private warriorRange = 76;
@@ -93,7 +119,87 @@ export class DungeonScene extends Phaser.Scene {
     private helpText!: Phaser.GameObjects.Text;
     private playerHpBar!: Phaser.GameObjects.Graphics;
     private playerHpText!: Phaser.GameObjects.Text;
+    private playerXpText!: Phaser.GameObjects.Text;
+    private warriorStaminaBar!: Phaser.GameObjects.Graphics;
     private combatMessage!: Phaser.GameObjects.Text;
+
+    private interactKey!: Phaser.Input.Keyboard.Key;
+
+    private chestVisual?: Phaser.GameObjects.Container;
+    private chestPrompt?: Phaser.GameObjects.Text;
+
+    // ================================
+    // ระบบเลเวล Warrior
+    // ================================
+
+    // เลเวลปัจจุบันของผู้เล่น
+    private playerLevel = 1;
+
+    // XP ปัจจุบัน
+    private playerXp = 0;
+
+    // จำนวน XP ที่ใช้สำหรับเลเวลถัดไป
+    private xpToNextLevel = 30;
+
+    // เก็บจำนวนครั้งที่ผู้เล่นเลือกอัปเกรดแล้ว
+    private upgradeChoicesMade = 0;
+
+    // สถานะว่ากำลังรอผู้เล่นเลือกอัปเกรดหรือไม่
+    private isChoosingUpgrade = false;
+    //UI
+    private upgradePanel?: Phaser.GameObjects.Container;
+    private upgradeButtons: Phaser.GameObjects.Container[] = [];
+
+    // ระดับการอัปเกรดพลังโจมตี
+    private warriorDamageLevel = 0;
+
+    // สถานะปลดล็อกสกิลชาร์จฟันวงกว้าง
+    private hasChargedSlash = false;
+
+    // ระดับการอัปเกรดสกิลชาร์จ
+    private chargedSlashLevel = 0;
+
+    // ================================
+    // ระบบความเหนื่อยของ Warrior
+    // ================================
+
+    // ความเหนื่อยสูงสุด
+    private warriorMaxStamina = 100;
+
+    // ความเหนื่อยปัจจุบัน
+    private warriorStamina = 100;
+
+    // อัตราฟื้นฟูความเหนื่อยต่อวินาที
+    private warriorStaminaRegen = 10;
+
+
+    // อัตราการใช้ Stamina ขณะเปิดโหมดดาบธาตุ (ต่อวินาที)
+    private swordElementStaminaDrain = 7.5;
+
+
+    // ระดับอัปเกรดความเร็วฟื้นฟูความเหนื่อย
+    private warriorStaminaRegenLevel = 0;
+
+    // ระดับอัปเกรดความจุความเหนื่อย
+    private warriorStaminaCapacityLevel = 0;
+
+    // ระดับอัปเกรดการประหยัดความเหนื่อย
+    private warriorStaminaEfficiencyLevel = 0;
+
+
+
+    /** กำลังชาร์จสกิลฟันดาบอยู่หรือไม่ */
+    private isChargingSlash = false;
+
+    /** ระยะเวลาที่กดชาร์จ หน่วยมิลลิวินาที */
+    private slashChargeTime = 0;
+
+    /** ระยะเวลาชาร์จขั้นต่ำก่อนฟันเต็มกำลัง */
+    private readonly minSlashChargeTime = 700;
+
+    /** ระยะเวลาชาร์จสูงสุด */
+    private readonly maxSlashChargeTime = 1800;
+
 
     private readonly roomWidth = 800;
     private readonly roomHeight = 500;
@@ -118,6 +224,10 @@ export class DungeonScene extends Phaser.Scene {
         super({ key: "DungeonScene" });
     }
 
+        init(data: { playerClass?: PlayerClass }) {
+        this.playerClass = data.playerClass ?? "warrior";
+    }
+
     create() {
         this.cameras.main.setBackgroundColor("#090b12");
         this.roomGraphics = this.add.graphics();
@@ -136,6 +246,10 @@ export class DungeonScene extends Phaser.Scene {
 
         this.cursors = this.input.keyboard.createCursorKeys();
 
+        this.interactKey = this.input.keyboard!.addKey(
+            Phaser.Input.Keyboard.KeyCodes.E
+        );
+
         this.wasd = this.input.keyboard.addKeys({
             up: Phaser.Input.Keyboard.KeyCodes.W,
             down: Phaser.Input.Keyboard.KeyCodes.S,
@@ -145,6 +259,10 @@ export class DungeonScene extends Phaser.Scene {
 
         this.dodgeKey = this.input.keyboard.addKey(
             Phaser.Input.Keyboard.KeyCodes.SHIFT
+        );
+
+        this.fireSwordKey = this.input.keyboard.addKey(
+            Phaser.Input.Keyboard.KeyCodes.X
         );
 
         this.classKey1 = this.input.keyboard.addKey(
@@ -169,10 +287,16 @@ export class DungeonScene extends Phaser.Scene {
         }).setDepth(20);
 
         this.playerHpBar = this.add.graphics().setDepth(20);
+        this.warriorStaminaBar = this.add.graphics().setDepth(20);
 
         this.playerHpText = this.add.text(16, 105, "", {
             fontSize: "12px",
             color: "#f0d7a0",
+        }).setDepth(20);
+
+        this.playerXpText = this.add.text(16, 125, "", {
+            fontSize: "12px",
+            color: "#8bd5ff",
         }).setDepth(20);
 
         this.combatMessage = this.add.text(400, 80, "", {
@@ -193,11 +317,72 @@ export class DungeonScene extends Phaser.Scene {
         ).setOrigin(0.5).setDepth(20);
 
         
+            
         this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-            if (pointer.leftButtonDown()) {
-                this.attack(pointer.x, pointer.y);
+            if (!pointer.leftButtonDown()) {
+                return;
             }
+
+            // ถ้าเป็น Warrior และปลดล็อกสกิลชาร์จแล้ว
+            // ให้เริ่มจับเวลาชาร์จแทนการโจมตีทันที
+            if (
+                this.playerClass === "warrior" &&
+                this.hasChargedSlash
+            ) {
+                if (this.isDead || this.isChoosingUpgrade || this.attackTimer > 0) {
+                    return;
+                }
+
+                this.isChargingSlash = true;
+                this.slashChargeTime = 0;
+                return;
+            }
+
+            // หากยังไม่ปลดล็อกสกิล ให้โจมตีแบบเดิม
+            this.attack(pointer.x, pointer.y);
         });
+
+
+        this.input.on("pointerup", (pointer: Phaser.Input.Pointer) => {
+            // ถ้าไม่ได้กำลังชาร์จ ไม่ต้องทำอะไร
+            if (!this.isChargingSlash) {
+                return;
+            }
+
+            this.isChargingSlash = false;
+
+            // ถ้าชาร์จไม่ถึงเวลาขั้นต่ำ ให้ฟันปกติแทน
+            if (this.slashChargeTime < this.minSlashChargeTime) {
+                this.attack(pointer.x, pointer.y);
+                this.slashChargeTime = 0;
+                return;
+            }
+
+            // ป้องกันการใช้สกิลระหว่างตายหรือเลือกอัปเกรด
+            if (this.isDead || this.isChoosingUpgrade) {
+                this.slashChargeTime = 0;
+                return;
+            }
+
+            // คำนวณทิศทางจากตัวละครไปยังตำแหน่งเมาส์
+            const angle = Phaser.Math.Angle.Between(
+                this.player.x,
+                this.player.y,
+                pointer.x,
+                pointer.y
+            );
+
+            // ใช้คูลดาวน์เดียวกับการโจมตีปกติ
+            this.attackTimer = this.attackCooldown;
+
+            // ปล่อยคลื่นดาบ
+            this.chargedSlash(angle);
+
+            // รีเซ็ตเวลาชาร์จ
+            this.slashChargeTime = 0;
+        });
+
+
 
 
         const firstRoom: DungeonRoom = {
@@ -206,6 +391,8 @@ export class DungeonScene extends Phaser.Scene {
             doors: new Map(),
             cleared: false,
             enemies: this.createEnemyStates(3),
+            chestSpawned: false,
+            chestOpened: false,
         };
 
         this.rooms.set(firstRoom.id, firstRoom);
@@ -217,8 +404,54 @@ export class DungeonScene extends Phaser.Scene {
         if (this.isDead) {
             return;
         }
+        if (this.isChoosingUpgrade) {
+            return;
+        }
 
         this.attackTimer = Math.max(0, this.attackTimer - delta);
+
+
+        
+        // จัดการ Stamina ของ Warrior
+        if (this.playerClass === "warrior") {
+            if (this.swordElement !== "normal") {
+                // เปิดโหมดดาบธาตุ: ใช้ Stamina ต่อเนื่อง
+                this.warriorStamina = Math.max(
+                    0,
+                    this.warriorStamina -
+                        (this.swordElementStaminaDrain * delta) / 1000
+                );
+
+                // Stamina หมด: ปิดโหมดดาบธาตุอัตโนมัติ
+                if (this.warriorStamina <= 0) {
+                    this.swordElement = "normal";
+                    this.showMessage("หมด Stamina! ปิดโหมดดาบธาตุ");
+                }
+            } else {
+                // ปิดโหมดดาบธาตุ: ฟื้นฟู Stamina
+                this.warriorStamina = Math.min(
+                    this.warriorMaxStamina,
+                    this.warriorStamina +
+                        (this.warriorStaminaRegen * delta) / 1000
+                );
+            }
+        }
+
+        this.updatePlayerUI();
+
+
+
+
+        // นับเวลาขณะที่กำลังชาร์จสกิลดาบ
+        if (this.isChargingSlash) {
+            this.slashChargeTime = Math.min(
+                this.maxSlashChargeTime,
+                this.slashChargeTime + delta
+            );
+        }
+
+
+
         this.dodgeTimer = Math.max(0, this.dodgeTimer - delta);
         this.invulnerableTimer = Math.max(
             0,
@@ -241,12 +474,38 @@ export class DungeonScene extends Phaser.Scene {
             this.showMessage("CLASS: MAGE");
         }
 
+        if (
+            Phaser.Input.Keyboard.JustDown(this.fireSwordKey) &&
+            this.playerClass === "warrior"
+        ) {
+            if (this.swordElement === "normal") {
+                this.swordElement = "fire";
+                this.showMessage("🔥 เปิดใช้งานดาบไฟ!");
+            } else {
+                this.swordElement = "normal";
+                this.showMessage("⚔️ กลับสู่ดาบปกติ");
+            }
+        }
+
+
         this.updateProjectiles(delta);
+        this.updateFireWaves(delta);
 
 
+        
         this.updateEnemies(delta);
         this.updatePlayerUI();
+
+        // ตรวจสอบว่าผู้เล่นเข้าใกล้หีบหรือไม่
+        this.updateChestPrompt();
+
+        // กด E เพื่อเปิดหีบ
+        if (Phaser.Input.Keyboard.JustDown(this.interactKey)) {
+            this.tryOpenChest();
+        }
+
         this.tryEnterDoor();
+
     }
 
     private movePlayer(delta: number) {
@@ -379,6 +638,7 @@ export class DungeonScene extends Phaser.Scene {
 
     
     private warriorAttack(angle: number) {
+
         const range = this.warriorRange;
         const startAngle = angle - this.warriorArc / 2;
         const endAngle = angle + this.warriorArc / 2;
@@ -386,7 +646,11 @@ export class DungeonScene extends Phaser.Scene {
         // เส้นฟันดาบ
         const slash = this.add.graphics().setDepth(10);
 
-        slash.lineStyle(7, 0xffe29a, 0.9);
+        slash.lineStyle(
+            7,
+            this.swordElement === "fire" ? 0xff5a1f : 0xffe29a,
+            0.9
+        );
         slash.beginPath();
         slash.arc(
             this.player.x,
@@ -460,17 +724,161 @@ export class DungeonScene extends Phaser.Scene {
                 continue;
             }
 
+            
             this.playHitEffect(
                 enemy.state.x,
                 enemy.state.y,
-                0xffe29a
+                this.swordElement === "fire"
+                    ? 0xff5a1f
+                    : 0xffe29a
             );
 
             this.damageEnemy(enemy, this.warriorDamage);
+
+            // 🔥 ดาบไฟทำให้ศัตรูติด Burn 3 วินาที
+            if (
+                this.swordElement === "fire" &&
+                enemy.state.alive
+            ) {
+                enemy.state.burnTimer = 3000;
+                enemy.state.burnTickTimer = 500;
+            }
+
         }
     }
 
 
+    private chargedSlash(angle: number) {
+
+
+        // ตรวจสอบว่าความเหนื่อยเพียงพอสำหรับใช้สกิลหรือไม่
+        const staminaCost = Math.max(
+            10,
+            30 - this.warriorStaminaEfficiencyLevel * 5
+        );
+
+        if (this.warriorStamina < staminaCost) {
+            this.showMessage("NOT ENOUGH STAMINA!");
+
+            this.slashChargeTime = 0;
+            return;
+        }
+
+        // หักความเหนื่อยเมื่อใช้สกิล
+        this.warriorStamina -= staminaCost;
+
+
+        // คำนวณพลังจากเวลาที่ชาร์จ ตั้งแต่ 0 ถึง 1
+        const chargeRatio = Phaser.Math.Clamp(
+            this.slashChargeTime / this.maxSlashChargeTime,
+            0,
+            1
+        );
+
+        // ดาเมจเพิ่มตามระดับสกิลและเวลาชาร์จ
+        const damage = Math.round(
+            this.warriorDamage *
+            (1.5 + chargeRatio + this.chargedSlashLevel * 0.25)
+        );
+
+        // ระยะโจมตีเพิ่มตามเวลาชาร์จ
+        const range = this.warriorRange + 35 + chargeRatio * 45;
+
+        // วงฟันกว้างกว่าการโจมตีปกติ
+        const arc = Math.PI * 0.9;
+        const startAngle = angle - arc / 2;
+        const endAngle = angle + arc / 2;
+
+        // เลือกสีตามธาตุดาบ
+        const isFire = this.swordElement === "fire";
+        const slashColor = isFire ? 0xff5a1f : 0x70eaff;
+        const slashHighlight = isFire ? 0xffc247 : 0xffffff;
+
+        // วาดคลื่นดาบ
+        const slash = this.add.graphics().setDepth(15);
+
+        slash.lineStyle(12, slashColor, 0.9);
+
+        slash.beginPath();
+        slash.arc(
+            this.player.x,
+            this.player.y,
+            range,
+            startAngle,
+            endAngle,
+            false
+        );
+        slash.strokePath();
+
+        slash.lineStyle(4, slashHighlight, 1);
+        slash.beginPath();
+        slash.arc(
+            this.player.x,
+            this.player.y,
+            range - 8,
+            startAngle,
+            endAngle,
+            false
+        );
+        slash.strokePath();
+
+        this.tweens.add({
+            targets: slash,
+            alpha: 0,
+            scale: 1.15,
+            duration: 300,
+            onComplete: () => slash.destroy(),
+        });
+
+        // ตรวจศัตรูที่อยู่ในระยะและมุมของคลื่นดาบ
+        const originX = this.player.x;
+        const originY = this.player.y;
+
+        for (const enemy of this.enemies) {
+            if (!enemy.state.alive) continue;
+
+            const distance = Phaser.Math.Distance.Between(
+                originX,
+                originY,
+                enemy.state.x,
+                enemy.state.y
+            );
+
+            if (distance > range) continue;
+
+            const enemyAngle = Phaser.Math.Angle.Between(
+                originX,
+                originY,
+                enemy.state.x,
+                enemy.state.y
+            );
+
+            const angleDifference = Math.abs(
+                Phaser.Math.Angle.Wrap(enemyAngle - angle)
+            );
+
+            if (angleDifference > arc / 2) continue;
+
+            this.playHitEffect(
+                enemy.state.x,
+                enemy.state.y,
+                isFire ? 0xff5a1f : 0x70eaff
+            );
+
+            this.damageEnemy(enemy, damage);
+
+            // 🔥 ดาบไฟทำให้ศัตรูติด Burn นาน 3 วินาที
+            if (isFire && enemy.state.alive) {
+                enemy.state.burnTimer = 3000;
+                enemy.state.burnTickTimer = 500;
+            }
+        }
+
+
+       this.showMessage(
+            `${isFire ? "🔥 FIRE CHARGED SLASH" : "CHARGED SLASH"}! ${damage} DAMAGE`
+        );
+    }
     
     private mageAttack(angle: number) {
         const startX = this.player.x;
@@ -536,6 +944,42 @@ export class DungeonScene extends Phaser.Scene {
         });
     }
 
+
+    // 🔥 ปล่อยคลื่นเพลิงไปยังตำแหน่งเมาส์
+    private castFireWave(angle: number) {
+        if (this.isDead || this.isDying) {
+            return;
+        }
+
+        const speed = 320;
+        const startX = this.player.x + Math.cos(angle) * 28;
+        const startY = this.player.y + Math.sin(angle) * 28;
+
+        const sprite = this.add.circle(
+            startX,
+            startY,
+            14,
+            0xff5a1f,
+            0.95
+        );
+
+        sprite.setStrokeStyle(3, 0xffc247, 1);
+        sprite.setDepth(10);
+
+        this.fireWaves.push({
+            sprite: sprite as unknown as Phaser.GameObjects.Arc,
+            x: startX,
+            y: startY,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            traveled: 0,
+            maxDistance: 360,
+            damage: this.warriorDamage,
+            hitEnemyIds: new Set<number>(),
+        });
+ 
+        this.showMessage("🔥 คลื่นเพลิง!");
+    }
 
     private damageEnemy(enemy: EnemyEntity, damage: number) {
         if (!enemy.state.alive) return;
@@ -622,13 +1066,22 @@ export class DungeonScene extends Phaser.Scene {
                 if (distance <= 16) {
                     projectile.hitEnemyIds.add(enemy.state.id);
 
+                    
                     this.playHitEffect(
                         enemy.state.x,
                         enemy.state.y,
-                        0x8bd5ff
+                        this.swordElement === "fire" ? 0xff5a1f : 0xffe29a
                     );
 
-                    this.damageEnemy(enemy, projectile.damage);
+                    this.damageEnemy(enemy, this.warriorDamage);
+
+                    // 🔥 เปิดโหมดดาบไฟแล้วฟันโดน จะทำให้ศัตรูติด Burn
+                    if (this.swordElement === "fire" && enemy.state.alive) {
+                        enemy.state.burnTimer = 3000;
+                        enemy.state.burnTickTimer = 500;
+                    }
+
+
                     hit = true;
                     break;
                 }
@@ -653,6 +1106,91 @@ export class DungeonScene extends Phaser.Scene {
     }
 
 
+    // 🔥 อัปเดตคลื่นเพลิง เคลื่อนที่ ชนศัตรู และทำให้ติดไฟ
+    private updateFireWaves(delta: number) {
+        const seconds = delta / 1000;
+
+        for (let i = this.fireWaves.length - 1; i >= 0; i--) {
+            const wave = this.fireWaves[i];
+
+            const moveX = wave.vx * seconds;
+            const moveY = wave.vy * seconds;
+
+            wave.x += moveX;
+            wave.y += moveY;
+            wave.traveled += Math.hypot(moveX, moveY);
+
+            wave.sprite.setPosition(wave.x, wave.y);
+
+            // สร้างประกายไฟตามทางที่คลื่นเคลื่อนที่
+            const trail = this.add.circle(
+                wave.x,
+                wave.y,
+                Phaser.Math.Between(3, 6),
+                0xff8c32,
+                0.8
+            ).setDepth(9);
+
+            this.tweens.add({
+                targets: trail,
+                scale: 0,
+                alpha: 0,
+                duration: 250,
+                onComplete: () => trail.destroy(),
+            });
+
+            // คลื่นไฟโดนศัตรูได้หลายตัว แต่ไม่ทำดาเมจซ้ำตัวเดิม
+            for (const enemy of this.enemies) {
+                const state = enemy.state;
+
+                if (!state.alive || wave.hitEnemyIds.has(state.id)) {
+                    continue;
+                }
+
+                const distance = Phaser.Math.Distance.Between(
+                    wave.x,
+                    wave.y,
+                    state.x,
+                    state.y
+                );
+
+                if (distance <= 28) {
+                    wave.hitEnemyIds.add(state.id);
+
+                    this.playHitEffect(
+                        state.x,
+                        state.y,
+                        0xff6b24
+                    );
+
+                    this.damageEnemy(enemy, wave.damage);
+
+                    // ติดไฟ 3 วินาที
+                    if (state.alive) {
+                        state.burnTimer = 3000;
+                        state.burnTickTimer = 500;
+                    }
+                }
+            }
+
+            const outsideRoom =
+                wave.x < 0 ||
+                wave.x > this.roomWidth ||
+                wave.y < 0 ||
+                wave.y > this.roomHeight;
+
+            if (
+                outsideRoom ||
+                wave.traveled >= wave.maxDistance
+            ) {
+                wave.sprite.destroy();
+                this.fireWaves.splice(i, 1);
+            }
+        }
+    }
+
+
+
 
     private updateEnemies(delta: number) {
         const speed = 55;
@@ -663,6 +1201,35 @@ export class DungeonScene extends Phaser.Scene {
             if (!state.alive) {
                 continue;
             }
+
+
+            // 🔥 ระบบ Burn: ศัตรูติดไฟและเสียเลือดต่อเนื่อง
+            if (state.burnTimer > 0) {
+                state.burnTimer -= delta;
+                state.burnTickTimer -= delta;
+
+                // สร้างความเสียหายจากไฟทุก ๆ 500 มิลลิวินาที
+                while (
+                    state.burnTickTimer <= 0 &&
+                    state.burnTimer > 0 &&
+                    state.alive
+                ) {
+                    state.burnTickTimer += 500;
+                    this.damageEnemy(enemy, 4);
+                }
+
+                // หยุดสถานะติดไฟเมื่อหมดเวลา
+                if (state.burnTimer <= 0) {
+                    state.burnTimer = 0;
+                    state.burnTickTimer = 0;
+                }
+            }
+
+            // หากศัตรูตายจากไฟ ไม่ต้องให้เดินหรือโจมตีต่อ
+            if (!state.alive) {
+                continue;
+            }
+
 
             state.attackCooldown = Math.max(
                 0,
@@ -800,6 +1367,10 @@ export class DungeonScene extends Phaser.Scene {
                 damage: 8,
                 attackCooldown: Phaser.Math.Between(300, 900),
                 alive: true,
+
+                //BURN
+                burnTimer: 0,
+                burnTickTimer: 0,
             });
         }
 
@@ -872,6 +1443,8 @@ export class DungeonScene extends Phaser.Scene {
         enemy.state.alive = false;
         enemy.sprite.destroy();
         enemy.hpBar.destroy();
+
+        this.gainXp(10);
 
         this.showMessage("ENEMY DEFEATED");
 
@@ -968,6 +1541,194 @@ export class DungeonScene extends Phaser.Scene {
         });
     }
 
+
+    private getXpRequired(level: number): number {
+        // XP ที่ต้องใช้เพิ่มขึ้นตามเลเวล
+        return level * 30;
+    }
+
+    private gainXp(amount: number) {
+        this.playerXp += amount;
+
+        // เลเวลอัปได้หลายครั้ง หากได้รับ XP มากพอ
+        while (this.playerXp >= this.xpToNextLevel) {
+            this.playerXp -= this.xpToNextLevel;
+            this.playerLevel++;
+
+            this.xpToNextLevel = this.getXpRequired(
+                this.playerLevel
+            );
+
+            this.showMessage(
+                `LEVEL UP! LEVEL ${this.playerLevel}`
+            );
+
+            if (
+                this.playerLevel % 3 === 0 &&
+                this.playerLevel >= 3
+            ) {
+                this.upgradeChoicesMade++;
+                this.isChoosingUpgrade = true;
+                this.showUpgradeChoices();
+            }
+        }
+
+        this.updatePlayerUI();
+    }
+
+        
+    private showUpgradeChoices() {
+        if (this.upgradePanel) {
+            this.upgradePanel.destroy();
+        }
+
+        this.upgradeButtons = [];
+
+        const panel = this.add.container(400, 250)
+            .setDepth(100)
+            .setScrollFactor(0);
+
+        this.upgradePanel = panel;
+
+        // พื้นหลังหน้าต่าง
+        const background = this.add.rectangle(
+            0, 0, 660, 300, 0x111522, 0.97
+        );
+
+        background.setStrokeStyle(2, 0xe8c27a);
+
+        const title = this.add.text(
+            0, -120, `WARRIOR LEVEL ${this.playerLevel}`,
+            {
+                fontSize: "24px",
+                color: "#e8c27a",
+                fontStyle: "bold",
+            }
+        ).setOrigin(0.5);
+
+        const subtitle = this.add.text(
+            0, -85, "เลือกอัปเกรด 1 อย่าง",
+            {
+                fontSize: "15px",
+                color: "#ffffff",
+            }
+        ).setOrigin(0.5);
+
+        panel.add([background, title, subtitle]);
+
+        const upgrades = [
+            {
+                id: "sword",
+                name: "ดาบทรงพลัง",
+                description: "เพิ่มระยะการฟันดาบ",
+            },
+            {
+                id: "damage",
+                name: "พลังโจมตี",
+                description: "เพิ่มความเสียหายของดาบ",
+            },
+            {
+                id: "charged",
+                name: this.hasChargedSlash
+                    ? "ชาร์จฟันวงกว้าง"
+                    : "ปลดล็อกชาร์จฟัน",
+                description: this.hasChargedSlash
+                    ? "พัฒนาความสามารถสกิลชาร์จ"
+                    : "ปลดล็อกสกิลโจมตีแบบชาร์จ",
+            },
+        ] as const;
+
+        upgrades.forEach((upgrade, index) => {
+            const x = (index - 1) * 210;
+
+            const button = this.add.container(x, 25);
+
+            const card = this.add.rectangle(
+                0, 0, 190, 135, 0x252d40
+            ).setInteractive({ useHandCursor: true });
+
+            card.setStrokeStyle(1, 0x8f9bb3);
+
+            const name = this.add.text(
+                0, -35, upgrade.name,
+                {
+                    fontSize: "17px",
+                    color: "#ffe29a",
+                    fontStyle: "bold",
+                    align: "center",
+                    wordWrap: { width: 170 },
+                }
+            ).setOrigin(0.5);
+
+            const description = this.add.text(
+                0, 15, upgrade.description,
+                {
+                    fontSize: "13px",
+                    color: "#ffffff",
+                    align: "center",
+                    wordWrap: { width: 165 },
+                }
+            ).setOrigin(0.5);
+
+            button.add([card, name, description]);
+            panel.add(button);
+            this.upgradeButtons.push(button);
+
+            card.on("pointerover", () => {
+                card.setFillStyle(0x3b4964);
+            });
+
+            card.on("pointerout", () => {
+                card.setFillStyle(0x252d40);
+            });
+
+            card.on("pointerdown", () => {
+                this.chooseUpgrade(upgrade.id);
+            });
+        });
+    }
+
+    private chooseUpgrade(
+        upgrade: "sword" | "damage" | "charged"
+    ) {
+        if (!this.isChoosingUpgrade) {
+            return;
+        }
+
+        switch (upgrade) {
+            case "sword":
+                this.warriorRange += 10;
+                this.showMessage("SWORD RANGE UP!");
+                break;
+
+            case "damage":
+                this.warriorDamage += 5;
+                this.warriorDamageLevel++;
+                this.showMessage("WARRIOR DAMAGE UP!");
+                break;
+
+            case "charged":
+                if (!this.hasChargedSlash) {
+                    this.hasChargedSlash = true;
+                    this.showMessage("CHARGED SLASH UNLOCKED!");
+                } else {
+                    this.chargedSlashLevel++;
+                    this.warriorDamage += 3;
+                    this.showMessage("CHARGED SLASH UPGRADED!");
+                }
+                break;
+        }
+
+        this.isChoosingUpgrade = false;
+
+        this.upgradePanel?.destroy();
+        this.upgradePanel = undefined;
+        this.upgradeButtons = [];
+
+        this.updatePlayerUI();
+    }
+
+
     
     private updatePlayerUI() {
         const ratio = this.playerHp / this.playerMaxHp;
@@ -1011,6 +1772,48 @@ export class DungeonScene extends Phaser.Scene {
             800 - marginRight - barWidth,
             barY - 22
         );
+
+        this.playerXpText.setText(`XP: ${this.playerXp}`);
+
+
+        // แสดงหลอด Stamina ของ Warrior
+        this.warriorStaminaBar.clear();
+
+        if (this.playerClass === "warrior") {
+            const staminaRatio = Phaser.Math.Clamp(
+                this.warriorStamina / this.warriorMaxStamina,
+                0,
+                1
+            );
+
+            const staminaBarWidth = 150;
+            const staminaBarHeight = 8;
+            const staminaBarX = 800 - 16 - staminaBarWidth;
+            const staminaBarY = 112;
+
+            // พื้นหลังหลอด
+            this.warriorStaminaBar.fillStyle(0x241f15, 1);
+            this.warriorStaminaBar.fillRect(
+                staminaBarX,
+                staminaBarY,
+                staminaBarWidth,
+                staminaBarHeight
+            );
+
+            // แถบความเหนื่อยสีทอง
+            this.warriorStaminaBar.fillStyle(0xe5a33d, 1);
+            this.warriorStaminaBar.fillRect(
+                staminaBarX,
+                staminaBarY,
+                staminaBarWidth * staminaRatio,
+                staminaBarHeight
+            );
+
+            this.playerXpText.setText(
+                `LV ${this.playerLevel} | XP: ${this.playerXp} | STA: ${Math.floor(this.warriorStamina)} / ${this.warriorMaxStamina}`
+            );
+        }
+
     }
 
 
@@ -1044,6 +1847,7 @@ export class DungeonScene extends Phaser.Scene {
         }
 
         room.cleared = true;
+        room.chestSpawned = true;
 
         for (const door of room.doors.values()) {
             door.locked = false;
@@ -1093,7 +1897,14 @@ export class DungeonScene extends Phaser.Scene {
         if (!door || door.locked) return;
 
         if (door.targetId !== null) {
-            this.enterRoom(door.targetId, side);
+            const opposite: Record<Side, Side> = {
+                top: "bottom",
+                bottom: "top",
+                left: "right",
+                right: "left",
+            };
+
+            this.enterRoom(door.targetId, opposite[side]);
             return;
         }
 
@@ -1120,6 +1931,8 @@ export class DungeonScene extends Phaser.Scene {
             doors: new Map(),
             cleared: false,
             enemies: this.createEnemyStates(Phaser.Math.Between(3, 4)),
+            chestSpawned: false,
+            chestOpened: false,
         };
 
         newRoom.doors.set(returnSide, {
@@ -1136,19 +1949,24 @@ export class DungeonScene extends Phaser.Scene {
         this.enterRoom(newId, returnSide);
     }
 
+    
     private enterRoom(roomId: number, enteredFrom: Side) {
         this.currentRoomId = roomId;
 
+        // enteredFrom คือด้านประตูที่ผู้เล่นเข้ามาในห้องปลายทาง
         switch (enteredFrom) {
             case "top":
                 this.player.setPosition(400, 55);
                 break;
+
             case "bottom":
                 this.player.setPosition(400, 445);
                 break;
+
             case "left":
                 this.player.setPosition(55, 250);
                 break;
+
             case "right":
                 this.player.setPosition(745, 250);
                 break;
@@ -1156,6 +1974,7 @@ export class DungeonScene extends Phaser.Scene {
 
         this.renderRoom();
     }
+
 
     private renderRoom() {
         const room = this.rooms.get(this.currentRoomId);
@@ -1213,8 +2032,125 @@ export class DungeonScene extends Phaser.Scene {
         );
 
         this.spawnEnemyVisuals(room);
+        this.renderChest(room);
         this.updatePlayerUI();
     }
+
+    
+
+    // แสดงหีบสมบัติเมื่อห้องถูกเคลียร์แล้ว
+    private renderChest(room: DungeonRoom) {
+        // ลบภาพหีบและข้อความเก่าก่อน ป้องกันการสร้างซ้ำ
+        this.chestVisual?.destroy();
+        this.chestVisual = undefined;
+        this.chestPrompt?.destroy();
+        this.chestPrompt = undefined;
+        // ยังไม่มีหีบ หรือเปิดหีบไปแล้ว ไม่ต้องแสดง
+        if (!room.chestSpawned || room.chestOpened) {
+            return;
+        }
+        // วางหีบไว้บริเวณกลางห้อง
+        const chestX = 400;
+        const chestY = 250;
+        const chest = this.add.container(chestX, chestY);
+        // ตัวหีบ
+        const body = this.add.rectangle(
+            0, 5, 34, 24, 0x9b5b2e
+        ).setStrokeStyle(2, 0x4b2a16);
+        // ฝาหีบ
+        const lid = this.add.rectangle(
+            0, -8, 38, 10, 0xd49a45
+        ).setStrokeStyle(2, 0x4b2a16);
+        // ตัวล็อกสีทอง
+        const lock = this.add.rectangle(
+            0, 5, 6, 9, 0xffdf70
+        ).setStrokeStyle(1, 0x6b481b);
+        chest.add([body, lid, lock]);
+        chest.setDepth(8);
+        this.chestVisual = chest;
+        // ข้อความจะแสดงเมื่อผู้เล่นเข้าใกล้หีบ
+        this.chestPrompt = this.add.text(
+            chestX,
+            chestY - 30,
+            "กด E เพื่อเปิดหีบ",
+            {
+                fontSize: "12px",
+                color: "#ffe7a3",
+                backgroundColor: "#38251acc",
+                padding: { x: 6, y: 4 },
+            }
+        ).setOrigin(0.5).setDepth(20);
+        this.chestPrompt.setVisible(false);
+    }
+
+
+    private updateChestPrompt() {
+        const room = this.rooms.get(this.currentRoomId);
+
+        if (!room || !room.chestSpawned || room.chestOpened) {
+            this.chestPrompt?.setVisible(false);
+            return;
+        }
+
+        if (!this.chestVisual || !this.chestPrompt) {
+            return;
+        }
+
+        const distance = Phaser.Math.Distance.Between(
+            this.player.x,
+            this.player.y,
+            this.chestVisual.x,
+            this.chestVisual.y
+        );
+
+        this.chestPrompt.setVisible(distance <= 55);
+    }
+
+
+
+    private tryOpenChest() {
+        const room = this.rooms.get(this.currentRoomId);
+
+        // ไม่มีหีบ หรือเปิดรับรางวัลไปแล้ว
+        if (
+            !room ||
+            !room.chestSpawned ||
+            room.chestOpened ||
+            !this.chestVisual
+        ) {
+            return;
+        }
+
+        // ตรวจสอบระยะห่างระหว่างผู้เล่นกับหีบ
+        const distance = Phaser.Math.Distance.Between(
+            this.player.x,
+            this.player.y,
+            this.chestVisual.x,
+            this.chestVisual.y
+        );
+
+        if (distance > 55) {
+            this.showMessage("TOO FAR FROM CHEST");
+            return;
+        }
+
+        // บันทึกสถานะก่อนให้รางวัล เพื่อป้องกันการรับซ้ำ
+        room.chestOpened = true;
+
+        // ลบภาพหีบและข้อความ
+        this.chestVisual.destroy();
+        this.chestVisual = undefined;
+
+        this.chestPrompt?.destroy();
+        this.chestPrompt = undefined;
+
+        // มอบ XP โบนัส
+        this.playerXp += 25;
+        this.updatePlayerUI();
+
+        this.showMessage("CHEST OPENED! +25 XP");
+    }
+
 
     private drawWallSide(room: DungeonRoom, side: Side) {
         const wall = this.wallThickness;

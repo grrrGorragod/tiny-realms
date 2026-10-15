@@ -1,5 +1,7 @@
-import { useEffect, useRef } from "react"
+
+import { useEffect, useRef } from "react";
 import Phaser from "phaser";
+import { LobbyScene } from "./LobbyScene";
 import { DungeonScene } from "./DungeonScene";
 
 function Game() {
@@ -14,14 +16,15 @@ function Game() {
             height: 500,
             parent: gameContainer.current,
             backgroundColor: "#11131b",
-            scene: [DungeonScene],
+            scene: [LobbyScene, DungeonScene],
         });
 
         return () => {
             game.destroy(true);
         };
     }, []);
-    
+
     return <div ref={gameContainer} className="game-container" />;
 }
+
 export default Game;
