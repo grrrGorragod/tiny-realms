@@ -1,19 +1,142 @@
+
 import Phaser from "phaser";
 
 export class DungeonScene extends Phaser.Scene {
+    // เก็บข้อมูลตัวละครและปุ่มควบคุมไว้ใช้ตลอดฉาก
+    private player!: Phaser.GameObjects.Container;
+    private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
+    private wasd!: {
+        up: Phaser.Input.Keyboard.Key;
+        down: Phaser.Input.Keyboard.Key;
+        left: Phaser.Input.Keyboard.Key;
+        right: Phaser.Input.Keyboard.Key;
+    };
+
     constructor() {
         super({ key: "DungeonScene" });
     }
 
     create() {
-        this.cameras.main.setBackgroundColor("#11131b");
+        // 1. ตั้งค่าสีพื้นหลังของดันเจี้ยน
+        this.cameras.main.setBackgroundColor("#090b12");
 
+        // 2. วาดพื้นหินเป็นตาราง
+        const floor = this.add.graphics();
+
+        for (let y = 0; y < 500; y += 40) {
+            for (let x = 0; x < 800; x += 40) {
+                const alternate =
+                    (x / 40 + y / 40) % 2 === 0;
+
+                floor.fillStyle(
+                    alternate ? 0x252735 : 0x20222f,
+                    1
+                );
+
+                floor.fillRect(x, y, 38, 38);
+
+                floor.lineStyle(1, 0x343644, 0.7);
+                floor.strokeRect(x, y, 38, 38);
+            }
+        }
+
+        // 3. เพิ่มชื่อดันเจี้ยน
         this.add
-            .text(400, 300, "Dungeon Scene", {
-                fontSize: "32px",
-                color: "#ffffff",
+            .text(400, 24, "THE FORGOTTEN SANCTUM", {
+                fontSize: "16px",
+                color: "#e8c27a",
                 fontStyle: "bold",
             })
+            .setOrigin(0.5, 0);
+
+        // 4. สร้างตัวละครจากรูปทรงสี่เหลี่ยม
+        this.player = this.add.container(400, 260);
+
+        // ลำตัวของตัวละคร
+        const body = this.add.rectangle(
+            0, 3, 16, 20, 0xc8a96b
+        );
+
+        // ศีรษะของตัวละคร
+        const head = this.add.rectangle(
+            0, -8, 10, 10, 0xf0d7a0
+        );
+
+        // เพิ่มชิ้นส่วนเข้าไปในตัวละครเดียวกัน
+        this.player.add([body, head]);
+
+        // ทำให้ตัวละครอยู่เหนือพื้นหิน
+        this.player.setDepth(1);
+
+        // 5. เตรียมปุ่มลูกศร
+        if (!this.input.keyboard) {
+            throw new Error("Keyboard input is unavailable");
+        }
+
+        this.cursors = this.input.keyboard.createCursorKeys();
+
+        // 6. เตรียมปุ่ม WASD
+        this.wasd = this.input.keyboard.addKeys({
+            up: Phaser.Input.Keyboard.KeyCodes.W,
+            down: Phaser.Input.Keyboard.KeyCodes.S,
+            left: Phaser.Input.Keyboard.KeyCodes.A,
+            right: Phaser.Input.Keyboard.KeyCodes.D,
+        }) as typeof this.wasd;
+
+        // 7. แสดงคำแนะนำการควบคุม
+        this.add
+            .text(
+                400,
+                475,
+                "MOVE: WASD / ARROW KEYS",
+                {
+                    fontSize: "12px",
+                    color: "#a3a3b5",
+                }
+            )
             .setOrigin(0.5);
+    }
+
+    update(_time: number, delta: number) {
+        // ความเร็วในการเดิน หน่วยเป็นพิกเซลต่อวินาที
+        const speed = 180;
+
+        let moveX = 0;
+        let moveY = 0;
+
+        // ตรวจสอบการกดปุ่มแนวนอน
+        if (this.cursors.left.isDown || this.wasd.left.isDown) {
+            moveX = -1;
+        } else if (
+            this.cursors.right.isDown ||
+            this.wasd.right.isDown
+        ) {
+            moveX = 1;
+        }
+
+        // ตรวจสอบการกดปุ่มแนวตั้ง
+        if (this.cursors.up.isDown || this.wasd.up.isDown) {
+            moveY = -1;
+        } else if (
+            this.cursors.down.isDown ||
+            this.wasd.down.isDown
+        ) {
+            moveY = 1;
+        }
+
+        // ป้องกันไม่ให้เดินเฉียงเร็วกว่าการเดินตรง
+        const direction = new Phaser.Math.Vector2(moveX, moveY);
+
+        if (direction.length() > 0) {
+            direction.normalize();
+
+            // คูณ delta เพื่อให้ความเร็วสม่ำเสมอในแต่ละเฟรม
+            this.player.x += direction.x * speed * (delta / 1000);
+            this.player.y += direction.y * speed * (delta / 1000);
+        }
+
+        // จำกัดไม่ให้ตัวละครเดินออกนอกหน้าจอ
+        this.player.x = Phaser.Math.Clamp(this.player.x, 10, 790);
+        this.player.y = Phaser.Math.Clamp(this.player.y, 45, 455);
     }
 }
